@@ -62,7 +62,7 @@ class FSChangeHandler(FileSystemEventHandler):
         if event.src_path == self.path_to_watch:
             return
         logger = logger if logger else self.logger
-        logger.info('"{}" has been moved to .'
+        logger.info('"{}" has been moved to "{}"'
                     .format(event.src_path, event.dest_path))
 
 
