@@ -1,13 +1,17 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+#
+# Python3 のみで動作可能
+# Python 3.5.2で動作検証済
+#
 
 '''\
-Watchdog demo.
+Watchdog demo. Requires watchdog library.
 
-Requires watchdog library.
+指定されたディレクトリを監視し、新たに追加されたファイルの内
+特定の拡張子を持つものを対象にして監視ディレクトリから見た
+ファイルの相対パスとsha1のhexdigestをsqlite3 DBに保存する。
 '''
-
-from __future__ import unicode_literals
 
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
 from logging import getLogger, StreamHandler, Formatter, NullHandler
@@ -24,23 +28,28 @@ from watchdog.observers import Observer
 _null_logger = getLogger(__name__)
 _null_logger.addHandler(NullHandler())
 
+EXTENSIONS = {'.rtf', '.xls', '.xlsx', '.ppt', '.pptx',
+              '.pdf', '.bmp', '.jpg', '.gif', '.bmp', '.png',
+              '.zip'}
+
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
 SQLITE3_FILENAME = 'db.sqlite3'
 SQLITE3_PATH = os.path.join(BASE_DIR, SQLITE3_FILENAME)
 
 
-class FSChangeHandler(FileSystemEventHandler):
-    def __init__(self, path_to_watch, logger=None):
-        self.path_to_watch = path_to_watch
+class DBRecorder(object):
+    def __init__(self, db_path, base_dir_path, *, drop=False, logger=None):
+        self.db_path = os.path.abspath(db_path)
+        self.base_dir_path = base_dir_path
         self.logger = logger or _null_logger
-        self._init_db()
-
-    def _init_db(self, logger=None):
-        logger = logger if logger else self.logger
-        logger.info('Init db at "{}"'.format(SQLITE3_PATH))
-        conn = sqlite3.connect(SQLITE3_PATH)
+        logger.info('Init DB at "{}"'.format(self.db_path))
+        conn = self._connect()
         c = conn.cursor()
+        if drop:
+            c.execute('''\
+            DROP TABLE IF EXISTS files
+            ''')
         c.execute('''\
         CREATE TABLE IF NOT EXISTS
         files (filename text, sha1 text)
@@ -50,19 +59,80 @@ class FSChangeHandler(FileSystemEventHandler):
         files_index ON files (filename)
         ''')
         conn.commit()
-
-        c = conn.cursor()
-        logger.debug('Showing all entries in db')
-        for row in c.execute('SELECT filename, sha1 FROM files'):
-            logger.debug('{}: {}'
-                         .format(row[0], row[1]))
-        logger.debug('Showed all entries in db')
-
-        conn.close()
         logger.info('Init db finished')
 
+    def _connect(self):
+        '''\
+        DBに接続する。
+
+        Note: watchdogのイベントは本体のスレッドとは
+        別のスレッドから発行される。
+        一方sqlite3のConnectionオブジェクトはスレッド間での使い回しが利かない。
+        よって、DBRecorder全体でひとつのConnectionを共有するのではなく、
+        必要なタイミングでコネクションを張り直す必要がある。
+        '''
+        # 標準のisolation_levelもDEFERREDのはずだが明文化されていない
+        # 明示しておく。
+        return sqlite3.connect(SQLITE3_PATH,
+                               isolation_level='DEFERRED')
+
+    def print_content_to_logger(self, *, logger=None):
+        logger = logger or self.logger
+        logger.info('Showing all entries in db')
+        c = self._connect().cursor()
+        logger.info('rowcount: {}'.format(c.rowcount))
+        for row in c.execute('SELECT filename, sha1 FROM files'):
+            logger.info('{}: {}'
+                        .format(row[0], row[1]))
+        logger.info('Showed all entries in db')
+
+    def insert(self, path, *, logger=None):
+        logger = logger or self.logger
+        if os.path.abspath(path) == self.db_path:
+            logger.debug(
+                'Modification to db itself is ignored ({})'
+                .format(path))
+            return
+        rel_path = os.path.relpath(os.path.abspath(path),
+                                   self.base_dir_path)
+        sha1digest = hashlib.sha1(rel_path.encode('utf-8')).hexdigest()
+        logger.info('Saving "{}" with sha1 "{}"'
+                    .format(rel_path, sha1digest))
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute('''\
+        INSERT OR REPLACE INTO files
+        (filename, sha1)
+        VALUES (?, ?)
+        ''', (rel_path, sha1digest))
+        conn.commit()
+
+    def delete(self, path, *, logger=None):
+        logger = logger or self.logger
+        if os.path.abspath(path) == self.db_path:
+            logger.debug(
+                'Modification to db itself is ignored ({})'
+                .format(path))
+            return
+        rel_path = os.path.relpath(os.path.abspath(path),
+                                   self.base_dir_path)
+        logger.info('Deleting "{}"'.format(rel_path))
+        conn = self._connect()
+        c = conn.cursor()
+        c.execute('DELETE FROM files WHERE (filename = ?)',
+                  (rel_path,))
+        conn.commit()
+
+
+class FSChangeHandler(FileSystemEventHandler):
+    def __init__(self, path_to_watch, recorder,
+                 *, logger=None):
+        self.path_to_watch = path_to_watch
+        self.logger = logger or _null_logger
+        self.recorder = recorder
+
     def on_any_event(self, event, logger=None):
-        logger = logger if logger else self.logger
+        logger = logger or self.logger
         logger.debug(('on_any_event(type: {},'
                       ' path: {}, event_type: {},'
                       ' is_directory: {})')
@@ -72,54 +142,73 @@ class FSChangeHandler(FileSystemEventHandler):
                              event.is_directory))
 
     def on_created(self, event, logger=None):
-        if event.src_path == self.path_to_watch:
+        logger = logger or self.logger
+        if event.is_directory:
+            logger.debug('Ignoring "{}" because it is a directory'
+                         .format(event.src_path))
             return
-        logger = logger if logger else self.logger
+        (_, ext) = os.path.splitext(event.src_path)
+        if ext not in EXTENSIONS:
+            logger.debug(('Ignoring "{}" because it is ignorable according'
+                          'to its extension "{}"')
+                         .format(event.src_path, ext))
+            return
         logger.info('"{}" has been created.'.format(event.src_path))
-        self._save_to_db(event.src_path, logger)
+        self.recorder.insert(event.src_path, logger=logger)
 
     def on_modified(self, event, logger=None):
-        if event.src_path == self.path_to_watch:
+        logger = logger or self.logger
+        if event.is_directory:
+            logger.debug('Ignoring "{}" because it is a directory'
+                         .format(event.src_path))
             return
-        logger = logger if logger else self.logger
+        (_, ext) = os.path.splitext(event.src_path)
+        if ext not in EXTENSIONS:
+            logger.debug(('Ignoring "{}" because it is ignorable according'
+                          'to its extension "{}"')
+                         .format(event.src_path, ext))
+            return
         logger.info('"{}" has been modified.'.format(event.src_path))
-        self._save_to_db(event.src_path, logger)
+        self.recorder.insert(event.src_path, logger=logger)
 
     def on_deleted(self, event, logger=None):
-        if event.src_path == self.path_to_watch:
+        logger = logger or self.logger
+        if event.is_directory:
+            logger.debug('Ignoring "{}" because it is a directory'
+                         .format(event.src_path))
             return
-        logger = logger if logger else self.logger
+        (_, ext) = os.path.splitext(event.src_path)
+        if ext not in EXTENSIONS:
+            logger.debug(('Ignoring "{}" because it is ignorable according'
+                          'to its extension "{}"')
+                         .format(event.src_path, ext))
+            return
         logger.info('"{}" has been deleted.'.format(event.src_path))
-        # TODO: delete entry
+        self.recorder.delete(event.src_path, logger=logger)
 
     def on_moved(self, event, logger=None):
-        if event.src_path == self.path_to_watch:
+        logger = logger or self.logger
+        if event.is_directory:
+            logger.debug('Ignoring "{}" because it is a directory'
+                         .format(event.src_path))
             return
-        logger = logger if logger else self.logger
         logger.info('"{}" has been moved to "{}"'
                     .format(event.src_path, event.dest_path))
-        # TODO: delete source path
-        self._save_to_db(event.dest_path, logger)
-
-    def _save_to_db(self, path, logger=None):
-        if path.endswith(SQLITE3_FILENAME):
-            logger.debug('Modification to db itself is ignored')
-            return
-        logger = logger if logger else self.logger
-        rel_path = os.path.relpath(os.path.abspath(path),
-                                   self.path_to_watch)
-        sha1digest = hashlib.sha1(rel_path.encode('utf-8')).hexdigest()
-        logger.info('Saving "{}" with sha1 "{}"'
-                    .format(rel_path, sha1digest))
-        conn = sqlite3.connect(SQLITE3_PATH)
-        c = conn.cursor()
-        c.execute('''\
-        INSERT OR REPLACE INTO files
-        (filename, sha1)
-        VALUES ("{}", "{}")
-        '''.format(rel_path, sha1digest))
-        conn.commit()
-        conn.close()
+        (_, ext) = os.path.splitext(event.src_path)
+        # Note: deleteとinsertはアトミック操作である必要はない
+        if ext not in EXTENSIONS:
+            logger.debug(('Ignoring "{}" because it is ignorable according'
+                          'to its extension "{}"')
+                         .format(event.src_path, ext))
+        else:
+            self.recorder.delete(event.src_path, logger=logger)
+        (_, ext) = os.path.splitext(event.dest_path)
+        if ext not in EXTENSIONS:
+            logger.debug(('Ignoring "{}" because it is ignorable according'
+                          'to its extension "{}"')
+                         .format(event.dest_path, ext))
+        else:
+            self.recorder.insert(event.dest_path, logger=logger)
 
 
 def main():
@@ -134,6 +223,11 @@ def main():
                         help=('Path to watch'))
     parser.add_argument('-s', '--path-to-sqlite3', default=SQLITE3_PATH,
                         help=('Path to sqlite3 db'))
+    parser.add_argument('--print-db-at-end', action='store_true',
+                        help=('Print DB content to logger'
+                              ' at the end of the execution'))
+    parser.add_argument('--drop-table', action='store_true',
+                        help=('If true, drop the sqlite3 table at first'))
     args = parser.parse_args()
     path_to_watch = os.path.abspath(args.path_to_watch)
 
@@ -150,7 +244,10 @@ def main():
     handler.setFormatter(Formatter('%(asctime)s %(message)s'))
     logger.info('Started running (path: {})'.format(path_to_watch))
 
-    event_handler = FSChangeHandler(path_to_watch, logger=logger)
+    recorder = DBRecorder(SQLITE3_PATH, path_to_watch, logger=logger)
+    event_handler = FSChangeHandler(path_to_watch,
+                                    recorder,
+                                    logger=logger)
     observer = Observer()
     observer.schedule(event_handler, path_to_watch, recursive=True)
     observer.start()
@@ -160,7 +257,8 @@ def main():
     except KeyboardInterrupt:
         observer.stop()
     observer.join()
-
+    if args.print_db_at_end:
+        recorder.print_content_to_logger()
     logger.info('Ended')
 
 
