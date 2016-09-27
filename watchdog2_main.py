@@ -28,9 +28,9 @@ from watchdog.observers import Observer
 _null_logger = getLogger(__name__)
 _null_logger.addHandler(NullHandler())
 
-EXTENSIONS = {'.rtf', '.xls', '.xlsx', '.ppt', '.pptx',
-              '.pdf', '.bmp', '.jpg', '.gif', '.bmp', '.png',
-              '.zip'}
+EXTENSIONS = {'rtf', 'xls', 'xlsx', 'ppt', 'pptx',
+              'pdf', 'bmp', 'jpg', 'gif', 'bmp', 'png',
+              'zip'}
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
@@ -39,14 +39,16 @@ SQLITE3_PATH = os.path.join(BASE_DIR, SQLITE3_FILENAME)
 
 
 class DBRecorder(object):
-    def __init__(self, db_path, base_dir_path, *, drop=False, logger=None):
+    def __init__(self, db_path, base_dir_path,
+                 *, drop_table=False, logger=None):
         self.db_path = os.path.abspath(db_path)
         self.base_dir_path = base_dir_path
         self.logger = logger or _null_logger
         logger.info('Init DB at "{}"'.format(self.db_path))
         conn = self._connect()
         c = conn.cursor()
-        if drop:
+        if drop_table:
+            logger.info('Drop table at first')
             c.execute('''\
             DROP TABLE IF EXISTS files
             ''')
@@ -80,8 +82,8 @@ class DBRecorder(object):
         logger = logger or self.logger
         logger.info('Showing all entries in db')
         c = self._connect().cursor()
-        logger.info('rowcount: {}'.format(c.rowcount))
-        for row in c.execute('SELECT filename, sha1 FROM files'):
+        rows = c.execute('SELECT filename, sha1 FROM files')
+        for row in rows:
             logger.info('{}: {}'
                         .format(row[0], row[1]))
         logger.info('Showed all entries in db')
@@ -147,8 +149,9 @@ class FSChangeHandler(FileSystemEventHandler):
             logger.debug('Ignoring "{}" because it is a directory'
                          .format(event.src_path))
             return
+        # extは空文字列 or .で始まる拡張子
         (_, ext) = os.path.splitext(event.src_path)
-        if ext not in EXTENSIONS:
+        if ext and ext[1:] not in EXTENSIONS:
             logger.debug(('Ignoring "{}" because it is ignorable according'
                           'to its extension "{}"')
                          .format(event.src_path, ext))
@@ -163,7 +166,7 @@ class FSChangeHandler(FileSystemEventHandler):
                          .format(event.src_path))
             return
         (_, ext) = os.path.splitext(event.src_path)
-        if ext not in EXTENSIONS:
+        if ext and ext[1:] not in EXTENSIONS:
             logger.debug(('Ignoring "{}" because it is ignorable according'
                           'to its extension "{}"')
                          .format(event.src_path, ext))
@@ -178,7 +181,7 @@ class FSChangeHandler(FileSystemEventHandler):
                          .format(event.src_path))
             return
         (_, ext) = os.path.splitext(event.src_path)
-        if ext not in EXTENSIONS:
+        if ext and ext[1:] not in EXTENSIONS:
             logger.debug(('Ignoring "{}" because it is ignorable according'
                           'to its extension "{}"')
                          .format(event.src_path, ext))
@@ -196,14 +199,14 @@ class FSChangeHandler(FileSystemEventHandler):
                     .format(event.src_path, event.dest_path))
         (_, ext) = os.path.splitext(event.src_path)
         # Note: deleteとinsertはアトミック操作である必要はない
-        if ext not in EXTENSIONS:
+        if ext and ext[1:] not in EXTENSIONS:
             logger.debug(('Ignoring "{}" because it is ignorable according'
                           'to its extension "{}"')
                          .format(event.src_path, ext))
         else:
             self.recorder.delete(event.src_path, logger=logger)
         (_, ext) = os.path.splitext(event.dest_path)
-        if ext not in EXTENSIONS:
+        if ext and ext[1:] not in EXTENSIONS:
             logger.debug(('Ignoring "{}" because it is ignorable according'
                           'to its extension "{}"')
                          .format(event.dest_path, ext))
@@ -229,8 +232,6 @@ def main():
     parser.add_argument('--drop-table', action='store_true',
                         help=('If true, drop the sqlite3 table at first'))
     args = parser.parse_args()
-    path_to_watch = os.path.abspath(args.path_to_watch)
-
     logger = getLogger(__name__)
     handler = StreamHandler()
     if args.debug:
@@ -242,9 +243,13 @@ def main():
     logger.addHandler(handler)
     # e.g. '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     handler.setFormatter(Formatter('%(asctime)s %(message)s'))
+
+    path_to_watch = os.path.abspath(args.path_to_watch)
     logger.info('Started running (path: {})'.format(path_to_watch))
 
-    recorder = DBRecorder(SQLITE3_PATH, path_to_watch, logger=logger)
+    recorder = DBRecorder(SQLITE3_PATH, path_to_watch,
+                          drop_table=args.drop_table,
+                          logger=logger)
     event_handler = FSChangeHandler(path_to_watch,
                                     recorder,
                                     logger=logger)
