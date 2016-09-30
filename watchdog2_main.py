@@ -217,12 +217,11 @@ class FSChangeHandler(FileSystemEventHandler):
 def main():
     parser = ArgumentParser(description=(__doc__),
                             formatter_class=RawDescriptionHelpFormatter)
+    parser.add_argument('path_to_watch', help=('Path to watch'))
     parser.add_argument('--log',
                         default='INFO',
                         help=('Set log level. e.g. DEBUG, INFO, WARN'))
     parser.add_argument('-d', '--debug', action='store_true',
-                        help=('Path to watch'))
-    parser.add_argument('-p', '--path-to-watch', default=BASE_DIR,
                         help=('Path to watch'))
     parser.add_argument('-s', '--path-to-sqlite3', default=SQLITE3_PATH,
                         help=('Path to sqlite3 db'))
@@ -245,9 +244,12 @@ def main():
     handler.setFormatter(Formatter('%(asctime)s %(message)s'))
 
     path_to_watch = os.path.abspath(args.path_to_watch)
-    logger.info('Started running (path: {})'.format(path_to_watch))
+    path_to_sqlite3 = os.path.abspath(args.path_to_sqlite3)
+    logger.info('Started running')
+    logger.info('path_to_watch: "{}"'.format(path_to_watch))
+    logger.info('path_to_sqlite3: "{}"'.format(path_to_sqlite3))
 
-    recorder = DBRecorder(SQLITE3_PATH, path_to_watch,
+    recorder = DBRecorder(path_to_sqlite3, path_to_watch,
                           drop_table=args.drop_table,
                           logger=logger)
     event_handler = FSChangeHandler(path_to_watch,

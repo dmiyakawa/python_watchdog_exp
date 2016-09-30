@@ -85,8 +85,18 @@ def main():
     if not os.path.exists(path):
         logger.error('"{}" does not exist'.format(path))
         return
-    if not os.path.isdir(args.path):
+    if not os.path.isdir(path):
         logger.error('"{}" does is not a directory'.format(path))
+        return
+    files_in_dir = os.listdir(path)
+    if files_in_dir:
+        if len(files_in_dir) < 5:
+            files_str = ''.join('"{}"'.format(f) for f in files_in_dir)
+            logger.error('Some content seems to exist in "{}" ({})'
+                         .format(path, files_str))
+        else:
+            logger.error('Some content seems to exist in "{}" ({} files)'
+                         .format(path, len(files_in_dir)))
         return
     logger.info('Started running (path: {})'.format(path))
 
