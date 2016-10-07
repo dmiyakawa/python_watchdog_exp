@@ -83,8 +83,14 @@ def main():
                 SELECT filename, sha1 FROM files
                 WHERE filename = ?
                 ''', (rel_path,)).fetchall()
-                if len(rows) != 1:
-                    reason = ('Multiple rows ({})'.format(len(rows)))
+                assert len(rows) >= 0
+                if len(rows) == 0:
+                    reason = 'Row missing'
+                    logger.debug(reason)
+                    invalid_paths.append(InvalidPath(rel_path, reason))
+                    continue
+                elif len(rows) > 1:
+                    reason = 'Multiple ({}) rows found'.format(len(rows))
                     logger.debug(reason)
                     invalid_paths.append(InvalidPath(rel_path, reason))
                     continue
@@ -100,7 +106,8 @@ def main():
                     continue
         logger.info('{} files handled'.format(total_files))
         if invalid_paths:
-            logger.error('DB may contain insufficient or incorrect data')
+            logger.error('{} item(s) look incorrect'
+                         .format(len(invalid_paths)))
             for invalid_path in invalid_paths:
                 logger.error('"{}" ({})'.format(invalid_path.path,
                                                 invalid_path.reason))

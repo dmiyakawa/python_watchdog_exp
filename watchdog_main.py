@@ -22,8 +22,6 @@ from watchdog.observers import Observer
 _null_logger = getLogger(__name__)
 _null_logger.addHandler(NullHandler())
 
-BASE_DIR = os.path.dirname(__file__)
-
 
 class FSChangeHandler(FileSystemEventHandler):
     def __init__(self, path_to_watch, logger=None):
@@ -69,12 +67,11 @@ class FSChangeHandler(FileSystemEventHandler):
 def main():
     parser = ArgumentParser(description=(__doc__),
                             formatter_class=RawDescriptionHelpFormatter)
+    parser.add_argument('path_to_watch', help=('Path to watch'))
     parser.add_argument('--log',
                         default='INFO',
                         help=('Set log level. e.g. DEBUG, INFO, WARN'))
     parser.add_argument('-d', '--debug', action='store_true',
-                        help=('Path to watch'))
-    parser.add_argument('-p', '--path-to-watch', default=BASE_DIR,
                         help=('Path to watch'))
     args = parser.parse_args()
     path_to_watch = os.path.abspath(args.path_to_watch)
