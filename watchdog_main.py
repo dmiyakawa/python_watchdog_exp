@@ -10,6 +10,7 @@ Requires watchdog library.
 from __future__ import unicode_literals
 
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
+from hashlib import sha256
 from logging import getLogger, StreamHandler, Formatter, NullHandler
 from logging import DEBUG
 
@@ -23,9 +24,22 @@ _null_logger = getLogger(__name__)
 _null_logger.addHandler(NullHandler())
 
 
+def _calc_digest(path, logger=None):
+    logger = logger or _null_logger
+    logger.debug('Start calculating hexdigest for {}'.format(path))
+    h = sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(4096), b''):
+            h.update(chunk)
+    logger.debug('Finished calculating hexdigest for {}'
+                 .format(path))
+    return h.hexdigest()
+
+
 class FSChangeHandler(FileSystemEventHandler):
-    def __init__(self, path_to_watch, logger=None):
+    def __init__(self, path_to_watch, logger=None, show_digest=False):
         self.path_to_watch = path_to_watch
+        self.show_digest = show_digest
         self.logger = logger or _null_logger
 
     def on_any_event(self, event, logger=None):
@@ -42,13 +56,23 @@ class FSChangeHandler(FileSystemEventHandler):
         if event.src_path == self.path_to_watch:
             return
         logger = logger if logger else self.logger
-        logger.info('"{}" has been created.'.format(event.src_path))
+        if self.show_digest:
+            logger.info('"{}" has been created (sha256: {})'
+                        .format(event.src_path,
+                                _calc_digest(event.src_path)))
+        else:
+            logger.info('"{}" has been created.'.format(event.src_path))
 
     def on_modified(self, event, logger=None):
         if event.src_path == self.path_to_watch:
             return
         logger = logger if logger else self.logger
-        logger.info('"{}" has been modified.'.format(event.src_path))
+        if self.show_digest:
+            logger.info('"{}" has been modified (sha256: {})'
+                        .format(event.src_path,
+                                _calc_digest(event.src_path)))
+        else:
+            logger.info('"{}" has been modified.'.format(event.src_path))
 
     def on_deleted(self, event, logger=None):
         if event.src_path == self.path_to_watch:
@@ -73,6 +97,8 @@ def main():
                         help=('Set log level. e.g. DEBUG, INFO, WARN'))
     parser.add_argument('-d', '--debug', action='store_true',
                         help=('Path to watch'))
+    parser.add_argument('-s', '--show-digest', action='store_true',
+                        help='Show hexdigest on file creation/modification')
     args = parser.parse_args()
     path_to_watch = os.path.abspath(args.path_to_watch)
 
@@ -89,7 +115,9 @@ def main():
     handler.setFormatter(Formatter('%(asctime)s %(message)s'))
     logger.info('Started running (path: {})'.format(path_to_watch))
 
-    event_handler = FSChangeHandler(path_to_watch, logger=logger)
+    event_handler = FSChangeHandler(path_to_watch,
+                                    logger=logger,
+                                    show_digest=args.show_digest)
     observer = Observer()
     observer.schedule(event_handler, path_to_watch, recursive=True)
     observer.start()
