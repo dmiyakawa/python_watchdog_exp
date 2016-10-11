@@ -56,7 +56,7 @@ class FSChangeHandler(FileSystemEventHandler):
         if event.src_path == self.path_to_watch:
             return
         logger = logger if logger else self.logger
-        if self.show_digest:
+        if (not event.is_directory) and self.show_digest:
             logger.info('"{}" has been created (sha256: {})'
                         .format(event.src_path,
                                 _calc_digest(event.src_path)))
@@ -67,7 +67,7 @@ class FSChangeHandler(FileSystemEventHandler):
         if event.src_path == self.path_to_watch:
             return
         logger = logger if logger else self.logger
-        if self.show_digest:
+        if (not event.is_directory) and self.show_digest:
             logger.info('"{}" has been modified (sha256: {})'
                         .format(event.src_path,
                                 _calc_digest(event.src_path)))
