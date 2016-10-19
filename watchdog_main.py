@@ -56,23 +56,33 @@ class FSChangeHandler(FileSystemEventHandler):
         if event.src_path == self.path_to_watch:
             return
         logger = logger if logger else self.logger
-        if (not event.is_directory) and self.show_digest:
-            logger.info('"{}" has been created (sha256: {})'
-                        .format(event.src_path,
-                                _calc_digest(event.src_path)))
-        else:
-            logger.info('"{}" has been created.'.format(event.src_path))
+        try:
+            if (not event.is_directory) and self.show_digest:
+                logger.info('"{}" has been created (sha256: {})'
+                            .format(event.src_path,
+                                    _calc_digest(event.src_path)))
+            else:
+                logger.info('"{}" has been created.'.format(event.src_path))
+        except OSError as e:
+            logger.info('"{}" has been created, but OSError detected during'
+                        ' processing it. Maybe already deleted? ({})'
+                        .format(event.src_path, e))
 
     def on_modified(self, event, logger=None):
         if event.src_path == self.path_to_watch:
             return
         logger = logger if logger else self.logger
-        if (not event.is_directory) and self.show_digest:
-            logger.info('"{}" has been modified (sha256: {})'
-                        .format(event.src_path,
-                                _calc_digest(event.src_path)))
-        else:
-            logger.info('"{}" has been modified.'.format(event.src_path))
+        try:
+            if (not event.is_directory) and self.show_digest:
+                logger.info('"{}" has been modified (sha256: {})'
+                            .format(event.src_path,
+                                    _calc_digest(event.src_path)))
+            else:
+                logger.info('"{}" has been modified.'.format(event.src_path))
+        except OSError as e:
+            logger.info('"{}" has been created, but OSError detected during'
+                        ' processing it. Maybe already deleted? ({})'
+                        .format(event.src_path, e))
 
     def on_deleted(self, event, logger=None):
         if event.src_path == self.path_to_watch:
